@@ -1,0 +1,267 @@
+---
+title: "Riqueza de especies de orquídeas en áreas de conservación de Costa Rica"
+author: "Kevin Córdoba Leitón y Manuel Peralta Reyes"
+lang: es
+format:
+  html:
+    toc: true
+    toc_float: true
+    theme: cosmo 
+---
+
+## Introducción
+
+En el presente proyecto se presenta una investigación centrada en representar la riqueza de especies de orquídeas en áreas de conservación en Costa Rica. El estudio incluye diversas herramientas visuales y estadísticas para analizar y visualizar la diversidad de orquídeas en estos entornos protegidos. Para la realización de estas herramientas se utilizaron datos de las [Áreas de conservación de Costa Rica en Web Feature Service (WFS) publicado por el Sistema Nacional de Áreas de Conservación (Sinac)](https://www.snitcr.go.cr/ico_servicios_ogc_info?k=bm9kbzo6NDA=&nombre=SINAC) y los [Registros de presencia de orquídeas de Costa Rica obtenidos a través de una consulta al portal de datos de GBIF](https://www.gbif.org/occurrence/download/0031171-230530130749713)
+
+El proyecto incluye un Mapa de riqueza de especies de orquídeas en áreas de conservación, el cual permite identificar las áreas con mayor concentración de diversidad orquideológica en Costa Rica. Mediante la ubicación geográfica de estos puntos, se pueden identificar los sitios de mayor importancia para la conservación de estas plantas y los principales focos de biodiversidad. Asimismo, se utiliza una Tabla de riqueza de especies de orquídeas en áreas de conservación, la cual brinda un desglose detallado de las especies presentes en cada área protegida. Esta tabla facilita la comparación de la diversidad de orquídeas entre distintas localidades, permitiendo identificar las especies más relevantes en cada una y destacando la singularidad de cada área en términos de conservación orquideológica.
+
+Adicionalmente, se emplean Gráficos estadísticos para presentar los datos recopilados. Un Gráfico de barras de riqueza de especies de orquídeas en áreas de conservación muestra la cantidad de especies presentes en cada área protegida, proporcionando una visualización clara de la diversidad a lo largo del territorio costarricense. También se genera un Gráfico de barras que representa la cantidad de registros de presencia por especie, centrándose específicamente en las 10 especies de orquídeas con mayor número de registros. Este gráfico permite comprender las especies más frecuentes y abundantes en estas áreas, lo cual es de gran relevancia para la conservación y seguimiento de sus poblaciones.
+
+Mediante la combinación de estos elementos visuales y estadísticos, se busca arrojar luz sobre la riqueza de especies de orquídeas en áreas de conservación en Costa Rica. El análisis y visualización de estos datos proporcionará una comprensión más profunda de la importancia de estos entornos protegidos como refugios para la diversidad biológica, y contribuirá a promover la conservación de estos hábitats únicos.
+
+```{r setup, include=FALSE}
+# Carga de paquetes
+library(tidyverse)
+library(DT)
+library(sf)
+library(rgdal)
+library(raster)
+library(terra)
+library(leaflet)
+library(leaflet.extras)
+library(leafem)
+library(viridisLite)
+library(ggplot2)
+library(plotly)
+```
+
+
+```{r}
+#| label: carga-muestra-datosareas
+#| code-fold: true
+# Carga de los datos de areas de conservación
+areas_conserva <-
+  st_read(
+    dsn = "https://raw.githubusercontent.com/gf0604-procesamientodatosgeograficos/2023-i/main/datos/sinac/areas_conservacion_simp_10m.geojson",
+    quiet = TRUE
+  ) |>
+  st_transform(4326)
+```
+
+```{r}
+#| label: carga-muestra-datosorquideas
+#| code-fold: true
+# Carga de datos de orquídeas de Costa Rica
+orquideas <-
+  st_read(
+    "C:/Users/User/OneDrive/Escritorio/Tarea 3/datos_gbif_orquideas.csv",
+    options = c(
+      "X_POSSIBLE_NAMES=decimalLongitude", 
+      "Y_POSSIBLE_NAMES=decimalLatitude"   
+    ),
+    quiet = TRUE
+  )
+
+# Asignación del CRS WGS84
+st_crs(orquideas) <- 4326
+```
+
+```{r}
+#| label: carga-muestra-datos-unionespacial
+#| code-fold: true
+# Unión espacial de orquídeas y areas de conservación 
+orquideas_union_areas <- 
+  st_join(
+    x = orquideas,
+    y = dplyr::select(areas_conserva, nombre_ac), 
+    join = st_within
+  )
+```
+
+```{r}
+#| label: carga-muestra-datos-conteo
+#| code-fold: true
+# Conteo de la cantidad de especies de orquídeas en areas de conservación 
+riqueza_especies_orquideas_areas <-
+  orquideas_union_areas |>
+  st_drop_geometry() |>
+  group_by(nombre_ac) |>
+  summarize(riqueza_especies_orquideas = n_distinct(species, na.rm = TRUE))
+```
+
+```{r}
+#| label: carga-union-datos-noespacial
+#| code-fold: true
+# Unión (no espacial) de áreas de conservación y riqueza de orquídeas
+areas_union_riqueza <-
+  left_join(
+    x = areas_conserva,
+    y = dplyr::select(riqueza_especies_orquideas_areas, nombre_ac, riqueza_especies_orquideas),
+    by = "nombre_ac"
+  ) |>
+  replace_na(list(riqueza_especies_orquideas = 0))
+
+```
+### Mapa de riqueza de especies de orquídeas en áreas de conservación
+
+```{r}
+#| label: carga-muestra-datos
+#| code-fold: true
+# Paleta de colores de riqueza de especies
+colores_riqueza_especies <- colorNumeric(
+  palette = "Reds",
+  domain = areas_union_riqueza$riqueza_especies_orquideas,
+  na.color = "transparent"
+)
+
+# Paleta de colores de especies
+colores_especies <- colorFactor(
+  palette = viridis(length(unique(orquideas$species))),
+  domain = orquideas$species
+)
+
+# Mapa leaflet
+leaflet() %>%
+  setView(lng = -84.19452, lat = 9.572735, zoom = 7) %>%
+  addTiles(group = "Mapa general (OpenStreetMap)") %>%
+  addProviderTiles(
+    providers$Esri.WorldImagery,
+    group = "Imágenes satelitales (ESRI World Imagery)"
+  ) %>%
+  addPolygons(
+    data = areas_union_riqueza,
+    fillColor = ~colores_riqueza_especies(areas_union_riqueza$riqueza_especies_orquideas),
+    fillOpacity = 0.8,
+    color = "black",
+    stroke = TRUE,
+    weight = 1.0,
+    popup = paste(
+      "<strong>AreaConservación:</strong>", areas_union_riqueza$nombre_ac, "<br/>",
+      "<strong>Riqueza de especies:</strong>", areas_union_riqueza$riqueza_especies_orquideas
+    ),
+    group = "Riqueza de especies"
+  ) %>%
+  addScaleBar(
+    position = "bottomleft",
+    options = scaleBarOptions(imperial = FALSE)
+  ) %>%
+  addLegend(
+    position = "bottomleft",
+    pal = colores_riqueza_especies,
+    values = areas_union_riqueza$riqueza_especies_orquideas,
+    group = "Riqueza de especies",
+    title = "Riqueza de especies"
+  ) %>%
+  addCircleMarkers(
+    data = orquideas,
+    stroke = FALSE,
+    radius = 4,
+    fillColor = ~colores_especies(orquideas$species),
+    fillOpacity = 1.0,
+    popup = paste(
+      "<strong>Especie:</strong>", orquideas$species, "<br/>",
+      "<strong>Localidad:</strong>", orquideas$locality, "<br/>",
+      "<strong>Fecha:</strong>", orquideas$eventDate, "<br/>",
+      "<strong>Fuente:</strong>", orquideas$institutionCode, "<br/>",
+      "<a href='", orquideas$occurrenceID, "'>Más información</a>"
+    ),
+    group = "Registros de presencia"
+  ) %>%
+  addLayersControl(
+    baseGroups = c("Mapa general (OpenStreetMap)", "Imágenes satelitales (ESRI World Imagery)"),
+    overlayGroups = c("Riqueza de especies", "Registros de presencia"),
+    options = layersControlOptions(collapsed = FALSE)
+  ) %>%
+  addResetMapButton() %>%
+  addSearchOSM() %>%
+  addMouseCoordinates() %>%
+  addFullscreenControl() %>%
+  hideGroup("Registros de presencia")
+
+```
+
+### Tabla de riqueza de especies de orquídeas en áreas de conservación
+
+```{r}
+#| label: riqueza-especies-tabla
+#| code-fold: true
+riqueza_especies_orquideas_areas %>%
+  dplyr::select(nombre_ac,
+                riqueza_especies_orquideas) %>%
+  datatable(
+    colnames = c(
+      "Área de Conservación",
+      "Riqueza de especies de Orquídeas"),
+    options = list(
+      pageLength = 5,
+      language = list(url = '//cdn.datatables.net/plug-ins/1.10.11/i18n/Spanish.json')
+    )
+  )
+```
+
+
+### Gráficos estadísticos
+
+#### Gráfico de barras de riqueza de especies de orquídeas en áreas de conservación
+
+```{r}
+#| label: riqueza-especies-barras
+#| code-fold: true
+# Ordenar los datos por riqueza de especies de orquídeas en orden 
+riqueza_especies_orquideas_areas <- riqueza_especies_orquideas_areas %>%
+  arrange(desc(riqueza_especies_orquideas))
+
+# Gráfico de barras interactivo riqueza de especies
+plot_ly(data = riqueza_especies_orquideas_areas, x = ~nombre_ac, y = ~riqueza_especies_orquideas, type = "bar") %>%
+  layout(xaxis = list(title = "Área de Conservación"), yaxis = list(title = "Riqueza de especies de Orquídeas"), 
+         title = "Riqueza de especies de Orquídeas por Área de Conservación", hovermode = "closest") %>%
+  add_text(x = ~nombre_ac, y = ~riqueza_especies_orquideas, text = ~riqueza_especies_orquideas, 
+           textposition = "inside", showlegend = FALSE) %>%
+  layout(xaxis = list(categoryorder = "total descending"))
+
+```
+
+
+#### Gráfico de barras de cantidad de registros de presencia por especie, para las 10 especies de orquídeas con más registros
+
+```{r}
+#| label: riqueza-especies-barras-registro
+#| code-fold: true
+library(dplyr)
+library(ggplot2)
+
+# Obtener las 10 especies con mayor cantidad de registros de presencia
+top_especies <- orquideas %>%
+  count(species) %>%
+  top_n(10, n) %>%
+  arrange(desc(n))
+
+# Filtrar los datos de las especies seleccionadas
+datos_top_especies <- orquideas %>%
+  filter(species %in% top_especies$species)
+
+# Obtener la cantidad de registros de presencia por especie
+datos_top_especies <- datos_top_especies %>%
+  count(species) %>%
+  arrange(desc(n))
+
+# Crear el gráfico de barras
+grafico_barras <- ggplot(datos_top_especies, aes(x = species, y = n)) +
+  geom_bar(fill = "#69b3a2", stat = "identity") +
+  coord_flip() +
+  ggtitle("Top 10 especies de orquídeas con mayor cantidad de registros de presencia") +
+  xlab("Especie") +
+  ylab("Cantidad de registros de presencia") +
+  theme_minimal()
+
+# Mostrar el gráfico
+grafico_barras
+
+```
+
+### Bibliografía
+SNIT. (2014). SISTEMA NACIONAL DE INFORMACIÓN TERRITORIAL.
+https://www.snitcr.go.cr/ico_servicios_ogc_info?k=bm9kbzo6NDA=&nombre=SINAC. 
+
+
+Gbif.org. (2023). Registros de presencia de orquídeas en Costa Rica. https://www.gbif.org/occurrence/download/0031171-230530130749713
